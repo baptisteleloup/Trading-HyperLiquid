@@ -21,17 +21,18 @@ OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
 def _build_exchange(testnet: bool = True) -> ccxt.binanceusdm:
-    """Create and configure the ccxt exchange instance."""
+    """
+    Create a ccxt exchange instance for fetching public OHLCV data.
+    Always uses the real Binance API — historical market data is public
+    and not available on demo/testnet environments.
+    """
     exchange = ccxt.binanceusdm(
         {
-            "apiKey": config.BINANCE_API_KEY,
-            "secret": config.BINANCE_API_SECRET,
             "enableRateLimit": True,
             "options": {"defaultType": "future"},
         }
     )
-    if testnet:
-        exchange.set_sandbox_mode(True)
+    # Do NOT use demo/testnet for market data — no historical data there
     return exchange
 
 
@@ -98,6 +99,8 @@ def fetch_ohlcv(
 
         # Filter candles within requested window
         candles = [c for c in candles if c[0] < end_ts]
+        if not candles:
+            break  # All remaining data is past end_ts
         all_candles.extend(candles)
 
         last_ts = candles[-1][0]

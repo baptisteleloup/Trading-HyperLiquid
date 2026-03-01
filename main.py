@@ -37,14 +37,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--strategy",
         nargs="+",
-        choices=["trend", "breakdown"],
-        default=["trend", "breakdown"],
+        choices=["trend", "breakdown", "bull"],
+        default=["trend"],
         help="Strategy or strategies to run (default: both)",
     )
     parser.add_argument(
         "--symbol",
         nargs="+",
-        default=["BTC/USDT:USDT"],
+        default=["BTC/USDC:USDC"],
         help="Trading symbol(s), e.g. BTC/USDT:USDT ETH/USDT:USDT",
     )
     parser.add_argument(
@@ -79,6 +79,7 @@ def run_backtest(args: argparse.Namespace) -> None:
 
     import signals.trend_following as tf_strategy
     import signals.breakdown as bd_strategy
+    import signals.trend_bull as bull_strategy
 
     for symbol in args.symbol:
         for strategy_name in args.strategy:
@@ -90,6 +91,10 @@ def run_backtest(args: argparse.Namespace) -> None:
             # Generate signals
             if strategy_name == "trend":
                 df = tf_strategy.generate_signals(
+                    symbol, args.start, args.end, testnet=config.BINANCE_TESTNET
+                )
+            elif strategy_name == "bull":
+                df = bull_strategy.generate_signals(
                     symbol, args.start, args.end, testnet=config.BINANCE_TESTNET
                 )
             else:

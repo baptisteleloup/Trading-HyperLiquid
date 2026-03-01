@@ -56,7 +56,7 @@ def get_logger(name: str) -> logging.Logger:
 # ---------------------------------------------------------------------------
 
 _JOURNAL_COLUMNS = [
-    "timestamp", "action", "strategy", "symbol",
+    "timestamp", "action", "strategy", "symbol", "side",
     "signal", "entry_price", "stop_loss", "take_profit",
     "quantity", "bear_regime", "dryrun",
 ]

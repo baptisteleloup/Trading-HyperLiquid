@@ -1,8 +1,13 @@
 """
-Live / dry-run trading bot main loop.
+Live / dry-run trading bot with regime-based orchestration.
 
-Polls every POLL_INTERVAL_SECONDS for new signal conditions.
-In dry-run mode, logs all signals without placing any orders.
+Architecture:
+  - Each tick, the regime classifier determines BULL / NEUTRAL / BEAR
+  - BULL  -> bull strategy signals, enter long positions
+  - BEAR  -> bear strategy signals, enter short positions
+  - NEUTRAL -> no new positions (existing ones hit SL/TP naturally)
+
+Only one strategy is active at a time.
 """
 
 import time
@@ -10,8 +15,9 @@ import traceback
 from datetime import datetime, timezone
 
 import config
-import signals.trend_following as tf_strategy
-import signals.breakdown as bd_strategy
+import signals.trend_following as bear_strategy
+import signals.trend_bull as bull_strategy
+from regime.classifier import classify, Regime
 from live.exchange import BinanceFuturesExchange
 from live.order_manager import OrderManager
 from live.position_tracker import Position, PositionTracker
@@ -22,16 +28,6 @@ logger = get_logger(__name__)
 
 
 class TradingBot:
-    """
-    Main polling loop for live/dryrun modes.
-
-    Args:
-        symbols:    List of symbols to trade, e.g. ["BTC/USDT:USDT"]
-        strategies: List of "trend" and/or "breakdown"
-        mode:       "live" or "dryrun"
-        testnet:    Use Binance testnet
-    """
-
     def __init__(
         self,
         symbols: list[str],
@@ -52,150 +48,139 @@ class TradingBot:
             initial_equity=self._get_account_equity()
         )
 
+        self._current_regime = Regime.NEUTRAL
+        self._regime_check_interval = 6  # check regime every N ticks
+        self._tick_count = 0
+
         logger.info(
             "Bot started | mode=%s testnet=%s symbols=%s strategies=%s",
             mode, testnet, symbols, strategies,
         )
 
     def run(self) -> None:
-        """Start the main polling loop (runs until interrupted)."""
         logger.info("Entering main loop (poll interval: %ds)", config.POLL_INTERVAL_SECONDS)
         while True:
             try:
                 self._tick()
             except KeyboardInterrupt:
-                logger.info("Bot stopped by user (KeyboardInterrupt)")
+                logger.info("Bot stopped by user")
                 break
             except Exception as exc:
                 logger.error("Unexpected error in tick: %s\n%s", exc, traceback.format_exc())
-
             time.sleep(config.POLL_INTERVAL_SECONDS)
-
-    # -------------------------------------------------------------------------
-    # Core tick
-    # -------------------------------------------------------------------------
 
     def _tick(self) -> None:
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        logger.debug("Tick at %s", now)
+        self._tick_count += 1
 
-        # Refresh position state from exchange
         self._position_tracker.sync()
-
-        # Update equity from exchange
         equity = self._get_account_equity()
         self._risk_mgr.update_equity(equity)
 
         if self._risk_mgr.halted:
-            logger.critical("CIRCUIT BREAKER ACTIVE — no new trades")
+            logger.critical("CIRCUIT BREAKER ACTIVE")
             return
 
-        for symbol in self.symbols:
-            for strategy_name in self.strategies:
-                self._process_signal(symbol, strategy_name)
+        # Check regime periodically
+        if self._tick_count % self._regime_check_interval == 1:
+            try:
+                result = classify(self.symbols[0], testnet=self.testnet)
+                self._current_regime = result.regime
+                logger.info("Regime: %s (score=%d) at %s", result.regime.value, result.score, now)
+            except Exception as exc:
+                logger.error("Regime classification failed: %s", exc)
 
-    def _process_signal(self, symbol: str, strategy_name: str) -> None:
-        """Fetch latest signal and act on it."""
-        try:
-            if strategy_name == "trend":
-                signal_data = tf_strategy.get_latest_signal(symbol, self.testnet)
-            elif strategy_name == "breakdown":
-                signal_data = bd_strategy.get_latest_signal(symbol, self.testnet)
+        regime = self._current_regime
+
+        for symbol in self.symbols:
+            if regime == Regime.BEAR:
+                self._process_signal(symbol, "bear")
+            elif regime == Regime.BULL:
+                self._process_signal(symbol, "bull")
             else:
-                logger.warning("Unknown strategy: %s", strategy_name)
-                return
+                logger.debug("NEUTRAL — no trades for %s", symbol)
+
+    def _process_signal(self, symbol: str, direction: str) -> None:
+        try:
+            if direction == "bear":
+                signal_data = bear_strategy.get_latest_signal(symbol, self.testnet)
+                side = "short"
+            else:
+                signal_data = bull_strategy.get_latest_signal(symbol, self.testnet)
+                side = "long"
         except Exception as exc:
-            logger.error("Signal fetch failed for %s/%s: %s", symbol, strategy_name, exc)
+            logger.error("%s signal failed for %s: %s", direction, symbol, exc)
             return
 
         sig = signal_data.get("signal", 0)
 
-        # ----- EXIT signal -----
+        # EXIT
         if sig == -1 and self._position_tracker.has_position(symbol):
             pos = self._position_tracker.get_position(symbol)
             if self.dryrun:
-                logger.info(
-                    "[DRYRUN] EXIT %s (strategy=%s) qty=%.4f",
-                    symbol, strategy_name, pos.quantity,
-                )
+                logger.info("[DRYRUN] EXIT %s %s qty=%.4f", side, symbol, pos.quantity)
             else:
-                result = self._order_mgr.close_position(
-                    symbol, pos.quantity, reason="signal_exit"
-                )
+                result = self._order_mgr.close_position(symbol, pos.quantity, reason="signal_exit")
                 if result:
                     self._position_tracker.remove_position(symbol)
-                    self._risk_mgr.on_position_closed(pnl=0)  # PnL updated via sync
-
-            log_trade({**signal_data, "action": "exit", "dryrun": self.dryrun})
+                    self._risk_mgr.on_position_closed(pnl=0)
+            log_trade({**signal_data, "action": "exit", "side": side, "dryrun": self.dryrun})
             return
 
-        # ----- ENTRY signal -----
-        if sig != 1:
-            return
-
-        if self._position_tracker.has_position(symbol):
-            logger.debug("[%s/%s] Already in position — skipping entry", symbol, strategy_name)
+        # ENTRY
+        if sig != 1 or self._position_tracker.has_position(symbol):
             return
 
         entry_price = signal_data.get("entry_price")
         stop_loss = signal_data.get("stop_loss")
         take_profit = signal_data.get("take_profit")
-
         if not all([entry_price, stop_loss, take_profit]):
-            logger.warning("[%s/%s] Incomplete signal data — skipping", symbol, strategy_name)
             return
 
+        strategy_name = signal_data.get("strategy", direction)
         trade_params = self._risk_mgr.calculate_trade(
-            symbol=symbol,
-            entry_price=entry_price,
-            stop_loss=stop_loss,
-            take_profit=take_profit,
-            strategy=strategy_name,
+            symbol=symbol, entry_price=entry_price, stop_loss=stop_loss,
+            take_profit=take_profit, strategy=strategy_name,
         )
-
         if trade_params is None:
             return
 
         if self.dryrun:
             logger.info(
-                "[DRYRUN] ENTER short %s | qty=%.4f entry=%.4f SL=%.4f TP=%.4f",
-                symbol, trade_params.quantity, entry_price, stop_loss, take_profit,
+                "[DRYRUN] ENTER %s %s | qty=%.4f entry=%.4f SL=%.4f TP=%.4f",
+                side, symbol, trade_params.quantity, entry_price, stop_loss, take_profit,
             )
         else:
-            result = self._order_mgr.enter_short(
-                symbol=symbol,
-                quantity=trade_params.quantity,
-                entry_price=entry_price,
-                stop_loss=stop_loss,
-                take_profit=take_profit,
-                strategy=strategy_name,
-            )
-            if result:
-                self._position_tracker.add_position(
-                    Position(
-                        symbol=symbol,
-                        side="short",
-                        quantity=trade_params.quantity,
-                        entry_price=entry_price,
-                        stop_loss=stop_loss,
-                        take_profit=take_profit,
-                        strategy=strategy_name,
-                    )
+            if side == "short":
+                result = self._order_mgr.enter_short(
+                    symbol=symbol, quantity=trade_params.quantity,
+                    entry_price=entry_price, stop_loss=stop_loss,
+                    take_profit=take_profit, strategy=strategy_name,
                 )
+            else:
+                result = self._order_mgr.enter_long(
+                    symbol=symbol, quantity=trade_params.quantity,
+                    entry_price=entry_price, stop_loss=stop_loss,
+                    take_profit=take_profit, strategy=strategy_name,
+                )
+            if result:
+                self._position_tracker.add_position(Position(
+                    symbol=symbol, side=side, quantity=trade_params.quantity,
+                    entry_price=entry_price, stop_loss=stop_loss,
+                    take_profit=take_profit, strategy=strategy_name,
+                ))
                 self._risk_mgr.on_position_opened()
 
-        log_trade({**signal_data, "action": "entry", "dryrun": self.dryrun,
-                   "quantity": trade_params.quantity})
-
-    # -------------------------------------------------------------------------
-    # Helpers
-    # -------------------------------------------------------------------------
+        log_trade({**signal_data, "action": "entry", "side": side,
+                   "dryrun": self.dryrun, "quantity": trade_params.quantity})
 
     def _get_account_equity(self) -> float:
         if self.dryrun:
-            return self._risk_mgr.equity if hasattr(self._risk_mgr, "equity") else config.BACKTEST_INITIAL_CAPITAL
+            risk_mgr = getattr(self, "_risk_mgr", None)
+            return risk_mgr.equity if risk_mgr is not None else config.BACKTEST_INITIAL_CAPITAL
         try:
             return self._exchange.get_usdt_balance()
         except Exception as exc:
             logger.warning("Could not fetch account equity: %s", exc)
-            return self._risk_mgr.equity
+            risk_mgr = getattr(self, "_risk_mgr", None)
+            return risk_mgr.equity if risk_mgr is not None else config.BACKTEST_INITIAL_CAPITAL

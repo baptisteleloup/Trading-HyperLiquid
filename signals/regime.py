@@ -34,13 +34,47 @@ def get_regime_series(
         end,
         testnet=testnet,
     )
-    df_4h = add_regime_indicator(df_4h)
+    df_4h = add_regime_indicator(df_4h, ema_period=config.REGIME_EMA_PERIOD)
     logger.debug(
-        "Regime: %d/%d bars in bear regime",
+        "Regime 4h: %d/%d bars in bear regime",
         df_4h["bear_regime"].sum(),
         len(df_4h),
     )
     return df_4h["bear_regime"]
+
+
+def get_daily_regime_series(
+    symbol: str,
+    start: str,
+    end: str | None = None,
+    testnet: bool = True,
+) -> pd.Series:
+    """
+    Return a boolean Series (bear_regime) on the daily timeframe.
+
+    True  → price below EMA-50 daily (confirmed medium-term downtrend)
+    False → not in bear regime
+    """
+    from datetime import datetime, timedelta
+
+    # Fetch extra history for EMA warmup (EMA-50 daily needs 50+ bars)
+    start_dt = datetime.fromisoformat(start)
+    warmup_start = (start_dt - timedelta(days=80)).strftime("%Y-%m-%d")
+
+    df_1d = load_ohlcv(
+        symbol,
+        config.REGIME_TIMEFRAME_DAILY,
+        warmup_start,
+        end,
+        testnet=testnet,
+    )
+    df_1d = add_regime_indicator(df_1d, ema_period=config.REGIME_EMA_DAILY)
+    logger.debug(
+        "Regime daily: %d/%d bars in bear regime",
+        df_1d["bear_regime"].sum(),
+        len(df_1d),
+    )
+    return df_1d["bear_regime"]
 
 
 def align_regime_to_df(

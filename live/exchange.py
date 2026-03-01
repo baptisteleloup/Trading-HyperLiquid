@@ -31,8 +31,8 @@ class BinanceFuturesExchange:
             }
         )
         if testnet:
-            self._exchange.set_sandbox_mode(True)
-            logger.info("Exchange initialised in TESTNET mode")
+            self._exchange.enable_demo_trading(True)
+            logger.info("Exchange initialised in DEMO TRADING mode (demo-fapi.binance.com)")
         else:
             logger.warning("Exchange initialised in LIVE mode — real money!")
 
@@ -72,7 +72,10 @@ class BinanceFuturesExchange:
 
     def get_usdt_balance(self) -> float:
         balance = self.fetch_balance()
-        return float(balance.get("USDT", {}).get("free", 0.0))
+        usdc = float(balance.get("USDC", {}).get("free", 0.0))
+        usdt = float(balance.get("USDT", {}).get("free", 0.0))
+        return usdc
+ 
 
     def fetch_positions(self) -> list[dict]:
         return self._retry(self._exchange.fetch_positions)

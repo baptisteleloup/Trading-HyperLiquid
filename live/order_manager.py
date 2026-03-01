@@ -84,6 +84,55 @@ class OrderManager:
         )
         return filled_order
 
+    def enter_long(
+        self,
+        symbol: str,
+        quantity: float,
+        entry_price: float,
+        stop_loss: float,
+        take_profit: float,
+        strategy: str = "",
+    ) -> Optional[dict]:
+        """Enter a long position (mirror of enter_short)."""
+        self._ex.set_leverage(symbol, config.LEVERAGE)
+        _, best_ask = self._ex.get_best_bid_ask(symbol)
+        limit_price = round(best_ask * (1 + config.LIMIT_ORDER_OFFSET_BPS), 4)
+        logger.info(
+            "[%s] Entering long: qty=%.4f limit=%.4f SL=%.4f TP=%.4f",
+            symbol, quantity, limit_price, stop_loss, take_profit,
+        )
+        try:
+            order = self._ex.place_limit_order(symbol, "buy", quantity, limit_price)
+            order_id = order["id"]
+        except Exception as exc:
+            logger.error("Failed to place limit entry: %s", exc)
+            return None
+        filled_order = self._wait_for_fill(order_id, symbol)
+        if filled_order is None:
+            logger.info("[%s] Limit order unfilled, cancelling -> market", symbol)
+            try:
+                self._ex.cancel_order(order_id, symbol)
+            except Exception as exc:
+                logger.warning("Cancel failed: %s", exc)
+            try:
+                filled_order = self._ex.place_market_order(symbol, "buy", quantity)
+            except Exception as exc:
+                logger.error("Market fallback failed: %s", exc)
+                return None
+        try:
+            self._ex.place_stop_loss_order(symbol, "sell", quantity, stop_loss)
+        except Exception as exc:
+            logger.error("SL order failed: %s", exc)
+        try:
+            self._ex.place_take_profit_order(symbol, "sell", quantity, take_profit)
+        except Exception as exc:
+            logger.error("TP order failed: %s", exc)
+        logger.info(
+            "[%s] Long entered. Fill price ~ %.4f", symbol,
+            filled_order.get("average") or filled_order.get("price", 0),
+        )
+        return filled_order
+
     def close_position(
         self,
         symbol: str,

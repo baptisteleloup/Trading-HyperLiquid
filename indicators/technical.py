@@ -103,13 +103,22 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def add_regime_indicator(df: pd.DataFrame) -> pd.DataFrame:
+def add_regime_indicator(df: pd.DataFrame, ema_period: int = None) -> pd.DataFrame:
     """
-    Add bear market regime column to a 4h DataFrame.
+    Add bear market regime column to a DataFrame.
 
-    bear_regime = True when close is below EMA-200.
+    bear_regime = True when close is below EMA.
+    Works for any timeframe (4h EMA-200, daily EMA-50, etc.)
     """
+    if ema_period is None:
+        ema_period = config.REGIME_EMA_PERIOD
     df = df.copy()
-    df["ema_200"] = ta.ema(df["close"], length=config.REGIME_EMA_PERIOD)
-    df["bear_regime"] = df["close"] < df["ema_200"]
+    ema_col = f"ema_{ema_period}"
+    ema_vals = ta.ema(df["close"], length=ema_period)
+    if ema_vals is None or not isinstance(ema_vals, pd.Series):
+        df[ema_col] = float("nan")
+        df["bear_regime"] = False
+    else:
+        df[ema_col] = ema_vals
+        df["bear_regime"] = df["close"] < df[ema_col].fillna(float("inf"))
     return df

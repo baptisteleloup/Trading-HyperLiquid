@@ -121,7 +121,8 @@ def get_latest_signal(
     from datetime import datetime, timedelta
 
     end = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S")
-    start = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%d")
+    # EMA-200 on 4h needs 200 bars = ~33 days; use 60 days for safe warmup
+    start = (datetime.utcnow() - timedelta(days=60)).strftime("%Y-%m-%d")
 
     df = generate_signals(symbol, start=start, end=end, testnet=testnet)
     last = df.iloc[-1]
