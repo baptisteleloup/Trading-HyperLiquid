@@ -11,11 +11,11 @@ from dotenv import load_dotenv
 load_dotenv(dotenv_path=Path(__file__).parent / ".env")
 
 # ---------------------------------------------------------------------------
-# Exchange credentials
+# Exchange credentials (HyperLiquid)
 # ---------------------------------------------------------------------------
-BINANCE_API_KEY = os.getenv("BINANCE_API_KEY", "")
-BINANCE_API_SECRET = os.getenv("BINANCE_API_SECRET", "")
-BINANCE_TESTNET = os.getenv("BINANCE_TESTNET", "true").lower() == "true"
+HL_WALLET_ADDRESS = os.getenv("HL_WALLET_ADDRESS", "")
+HL_PRIVATE_KEY = os.getenv("HL_PRIVATE_KEY", "")
+HL_TESTNET = os.getenv("HL_TESTNET", "true").lower() == "true"
 
 # ---------------------------------------------------------------------------
 # Strategy parameters
@@ -77,7 +77,7 @@ RISK_PER_TRADE = 0.01            # 1% of equity per trade
 LEVERAGE = 5                     # 5× leverage
 MAX_OPEN_POSITIONS = 5
 CIRCUIT_BREAKER_DRAWDOWN = 0.15  # Halt if equity drops 15% from session high
-MIN_ORDER_USDT = 10.0            # Minimum Binance order size
+MIN_ORDER_SIZE = 10.0            # Minimum order size (USDC notional)
 
 # ---------------------------------------------------------------------------
 # Backtesting

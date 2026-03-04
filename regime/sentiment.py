@@ -4,7 +4,7 @@ Sentiment scoring module — 3 sources, score from -3 to +3.
 Sources:
   1. Fear & Greed Index (Alternative.me) → -1 to +1
   2. BTC/ETH ratio momentum → -1 to +1
-  3. Funding rate (Binance perps) → -1 to +1
+  3. Funding rate (HyperLiquid perps) → -1 to +1
 """
 
 import requests
@@ -69,11 +69,11 @@ def _fetch_btc_eth_ratio(testnet: bool = False) -> int:
     Neutral zone: < 2% difference → 0
     """
     try:
-        exchange = ccxt.binanceusdm()  # public, no auth needed
-        
+        exchange = ccxt.hyperliquid()  # public, no auth needed
+
         # Fetch last 7 daily candles for both
-        btc_ohlcv = exchange.fetch_ohlcv("BTC/USDT:USDT", "1d", limit=8)
-        eth_ohlcv = exchange.fetch_ohlcv("ETH/USDT:USDT", "1d", limit=8)
+        btc_ohlcv = exchange.fetch_ohlcv("BTC/USDC:USDC", "1d", limit=8)
+        eth_ohlcv = exchange.fetch_ohlcv("ETH/USDC:USDC", "1d", limit=8)
         
         if len(btc_ohlcv) < 8 or len(eth_ohlcv) < 8:
             return 0, None
@@ -101,16 +101,16 @@ def _fetch_btc_eth_ratio(testnet: bool = False) -> int:
         return 0, None
 
 
-def _fetch_funding_rate(symbol: str = "BTC/USDT:USDT") -> int:
+def _fetch_funding_rate(symbol: str = "BTC/USDC:USDC") -> int:
     """
-    Current funding rate from Binance perps.
-    
+    Current funding rate from HyperLiquid perps.
+
     Funding > +0.03% → market overleveraged long → -1 (bear signal)
     Funding < -0.03% → market overleveraged short → +1 (bull signal)
     Between → 0
     """
     try:
-        exchange = ccxt.binanceusdm()
+        exchange = ccxt.hyperliquid()
         
         # Fetch funding rate
         funding = exchange.fetch_funding_rate(symbol)
@@ -130,7 +130,7 @@ def _fetch_funding_rate(symbol: str = "BTC/USDT:USDT") -> int:
         return 0, None
 
 
-def score_sentiment(symbol: str = "BTC/USDT:USDT", testnet: bool = False) -> SentimentResult:
+def score_sentiment(symbol: str = "BTC/USDC:USDC", testnet: bool = False) -> SentimentResult:
     """
     Compute composite sentiment score from all 3 sources.
     Returns SentimentResult with score in [-3, +3].

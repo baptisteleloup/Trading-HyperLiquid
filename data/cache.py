@@ -41,11 +41,11 @@ def load_ohlcv(
     - force_refresh=True → always re-fetch from API.
 
     Args:
-        symbol:        e.g. "BTC/USDT:USDT"
+        symbol:        e.g. "BTC/USDC:USDC"
         timeframe:     e.g. "1h"
         start:         ISO date string
         end:           ISO date string (exclusive). Defaults to now.
-        testnet:       Use Binance testnet
+        testnet:       Use testnet (ignored for data — always mainnet)
         force_refresh: Bypass cache
 
     Returns:

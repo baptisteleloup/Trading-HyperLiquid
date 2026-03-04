@@ -12,14 +12,14 @@ import time
 from typing import Optional
 
 import config
-from live.exchange import BinanceFuturesExchange
+from live.exchange import HyperLiquidExchange
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
 
 class OrderManager:
-    def __init__(self, exchange: BinanceFuturesExchange) -> None:
+    def __init__(self, exchange: HyperLiquidExchange) -> None:
         self._ex = exchange
 
     def enter_short(

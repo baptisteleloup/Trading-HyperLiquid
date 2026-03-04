@@ -19,7 +19,7 @@ import signals.trend_following as bear_strategy
 import signals.trend_bull as bull_strategy
 from regime.composite import classify_composite, CompositeResult
 from regime.classifier import Regime
-from live.exchange import BinanceFuturesExchange
+from live.exchange import HyperLiquidExchange
 from live.order_manager import OrderManager
 from live.position_tracker import Position, PositionTracker
 from risk.manager import RiskManager
@@ -34,7 +34,7 @@ class TradingBot:
         symbols: list[str],
         strategies: list[str],
         mode: str = "dryrun",
-        testnet: bool = config.BINANCE_TESTNET,
+        testnet: bool = config.HL_TESTNET,
     ) -> None:
         self.symbols = symbols
         self.strategies = strategies
@@ -42,7 +42,7 @@ class TradingBot:
         self.testnet = testnet
         self.dryrun = mode == "dryrun"
 
-        self._exchange = BinanceFuturesExchange(testnet=testnet)
+        self._exchange = HyperLiquidExchange(testnet=testnet)
         self._order_mgr = OrderManager(self._exchange)
         self._position_tracker = PositionTracker(self._exchange)
         self._risk_mgr = RiskManager(
@@ -184,7 +184,7 @@ class TradingBot:
             risk_mgr = getattr(self, "_risk_mgr", None)
             return risk_mgr.equity if risk_mgr is not None else config.BACKTEST_INITIAL_CAPITAL
         try:
-            return self._exchange.get_usdt_balance()
+            return self._exchange.get_balance()
         except Exception as exc:
             logger.warning("Could not fetch account equity: %s", exc)
             risk_mgr = getattr(self, "_risk_mgr", None)

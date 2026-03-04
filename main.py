@@ -1,14 +1,14 @@
 """
-Bear Trader — Binance Futures Bear Market Algo Trading System
-=============================================================
+Bear Trader — HyperLiquid Futures Algo Trading System
+=====================================================
 
 Usage examples:
-  python main.py --mode backtest --strategy trend --symbol BTC/USDT:USDT
-  python main.py --mode live --strategy trend --symbol BTC/USDT:USDT
+  python main.py --mode backtest --strategy trend --symbol BTC/USDC:USDC
+  python main.py --mode live --strategy trend --symbol BTC/USDC:USDC
 
 Safety:
-  BINANCE_TESTNET=true in .env by default.
-  Set BINANCE_TESTNET=false only when ready to trade with real money.
+  HL_TESTNET=true in .env by default.
+  Set HL_TESTNET=false only when ready to trade with real money.
 """
 
 import argparse
@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Bear Trader — Binance Futures algorithmic trading system",
+        description="Bear Trader — HyperLiquid Futures algorithmic trading system",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         "--symbol",
         nargs="+",
         default=["BTC/USDC:USDC"],
-        help="Trading symbol(s), e.g. BTC/USDT:USDT ETH/USDT:USDT",
+        help="Trading symbol(s), e.g. BTC/USDC:USDC ETH/USDC:USDC",
     )
     parser.add_argument(
         "--start",
@@ -88,11 +88,11 @@ def run_backtest(args: argparse.Namespace) -> None:
             # Generate signals
             if strategy_name == "trend":
                 df = tf_strategy.generate_signals(
-                    symbol, args.start, args.end, testnet=config.BINANCE_TESTNET
+                    symbol, args.start, args.end, testnet=config.HL_TESTNET
                 )
             elif strategy_name == "bull":
                 df = bull_strategy.generate_signals(
-                    symbol, args.start, args.end, testnet=config.BINANCE_TESTNET
+                    symbol, args.start, args.end, testnet=config.HL_TESTNET
                 )
 
             df.attrs["strategy"] = strategy_name
@@ -128,9 +128,9 @@ def run_backtest(args: argparse.Namespace) -> None:
 def run_live_or_dryrun(args: argparse.Namespace) -> None:
     from live.bot import TradingBot
 
-    if args.mode == "live" and not config.BINANCE_TESTNET:
-        print("\n⚠️  WARNING: You are about to trade with REAL MONEY on Binance!")
-        print("   BINANCE_TESTNET=false in your .env file.")
+    if args.mode == "live" and not config.HL_TESTNET:
+        print("\n⚠️  WARNING: You are about to trade with REAL MONEY on HyperLiquid!")
+        print("   HL_TESTNET=false in your .env file.")
         confirm = input("   Type 'YES' to confirm: ").strip()
         if confirm != "YES":
             print("Aborting.")
@@ -140,7 +140,7 @@ def run_live_or_dryrun(args: argparse.Namespace) -> None:
         symbols=args.symbol,
         strategies=args.strategy,
         mode=args.mode,
-        testnet=config.BINANCE_TESTNET,
+        testnet=config.HL_TESTNET,
     )
     bot.run()
 
@@ -150,7 +150,7 @@ def main() -> None:
 
     logger.info(
         "Bear Trader starting | mode=%s testnet=%s",
-        args.mode, config.BINANCE_TESTNET,
+        args.mode, config.HL_TESTNET,
     )
 
     if args.mode == "backtest":

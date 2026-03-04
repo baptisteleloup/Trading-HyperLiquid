@@ -1,7 +1,7 @@
 """
 OHLCV data fetcher with pagination support.
 
-Fetches historical candle data from Binance USDT-M Futures via ccxt,
+Fetches historical candle data from HyperLiquid via ccxt,
 handling pagination automatically to fetch arbitrarily long histories.
 """
 
@@ -20,19 +20,17 @@ logger = get_logger(__name__)
 OHLCV_COLUMNS = ["timestamp", "open", "high", "low", "close", "volume"]
 
 
-def _build_exchange(testnet: bool = True) -> ccxt.binanceusdm:
+def _build_exchange(testnet: bool = True) -> ccxt.hyperliquid:
     """
     Create a ccxt exchange instance for fetching public OHLCV data.
-    Always uses the real Binance API — historical market data is public
-    and not available on demo/testnet environments.
+    Always uses HyperLiquid mainnet — testnet has no historical data.
     """
-    exchange = ccxt.binanceusdm(
+    exchange = ccxt.hyperliquid(
         {
             "enableRateLimit": True,
-            "options": {"defaultType": "future"},
         }
     )
-    # Do NOT use demo/testnet for market data — no historical data there
+    # Do NOT use testnet for market data — no historical data there
     return exchange
 
 
@@ -44,14 +42,14 @@ def fetch_ohlcv(
     testnet: bool = True,
 ) -> pd.DataFrame:
     """
-    Fetch OHLCV data from Binance Futures with automatic pagination.
+    Fetch OHLCV data from HyperLiquid with automatic pagination.
 
     Args:
-        symbol:    e.g. "BTC/USDT:USDT"
+        symbol:    e.g. "BTC/USDC:USDC"
         timeframe: e.g. "1h", "4h", "1d"
         start:     ISO date string, e.g. "2022-06-01"
         end:       ISO date string (exclusive). Defaults to now.
-        testnet:   Use Binance testnet if True.
+        testnet:   Ignored — always uses mainnet for historical data.
 
     Returns:
         DataFrame with columns: timestamp, open, high, low, close, volume
@@ -71,7 +69,7 @@ def fetch_ohlcv(
 
     all_candles: list[list] = []
     since = start_ts
-    limit = 1000  # Binance max per request
+    limit = 5000  # HyperLiquid allows larger pages
 
     logger.info(
         "Fetching %s %s from %s to %s",

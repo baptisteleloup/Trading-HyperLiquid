@@ -123,7 +123,7 @@ def run_backtest(
             risk_amount = equity * risk_pct
             quantity = risk_amount / risk_per_unit
             notional = quantity * entry_px
-            if notional < config.MIN_ORDER_USDT:
+            if notional < config.MIN_ORDER_SIZE:
                 equity_history.append((ts, equity))
                 continue
 

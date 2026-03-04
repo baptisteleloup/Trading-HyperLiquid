@@ -99,10 +99,10 @@ class RiskManager:
 
         # Minimum order check
         notional_value = raw_quantity * entry_price
-        if notional_value < config.MIN_ORDER_USDT:
+        if notional_value < config.MIN_ORDER_SIZE:
             logger.warning(
-                "Order too small (%.4f USDT) — minimum is %.2f USDT",
-                notional_value, config.MIN_ORDER_USDT,
+                "Order too small (%.4f USDC) — minimum is %.2f USDC",
+                notional_value, config.MIN_ORDER_SIZE,
             )
             return None
 

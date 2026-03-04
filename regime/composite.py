@@ -46,9 +46,9 @@ def classify_composite(
     # Technical analysis
     tech = classify_technical(symbol, testnet=testnet)
     
-    # Sentiment analysis (use USDT pair for sentiment regardless of trading pair)
+    # Sentiment analysis (use USDC pair for sentiment regardless of trading pair)
     base = symbol.split("/")[0]
-    sentiment_symbol = f"{base}/USDT:USDT"
+    sentiment_symbol = f"{base}/USDC:USDC"
     sent = score_sentiment(sentiment_symbol, testnet=testnet)
     
     # Combine

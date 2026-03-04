@@ -1,7 +1,7 @@
 """
-ccxt binanceusdm exchange wrapper.
+ccxt HyperLiquid exchange wrapper.
 
-Provides a thin, retry-safe interface to Binance USDT-M Futures.
+Provides a thin, retry-safe interface to HyperLiquid perpetual futures.
 All order placement goes through this module.
 """
 
@@ -18,21 +18,20 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2.0
 
 
-class BinanceFuturesExchange:
-    """Thin wrapper around ccxt.binanceusdm with retry logic."""
+class HyperLiquidExchange:
+    """Thin wrapper around ccxt.hyperliquid with retry logic."""
 
-    def __init__(self, testnet: bool = config.BINANCE_TESTNET) -> None:
-        self._exchange = ccxt.binanceusdm(
+    def __init__(self, testnet: bool = config.HL_TESTNET) -> None:
+        self._exchange = ccxt.hyperliquid(
             {
-                "apiKey": config.BINANCE_API_KEY,
-                "secret": config.BINANCE_API_SECRET,
+                "walletAddress": config.HL_WALLET_ADDRESS,
+                "privateKey": config.HL_PRIVATE_KEY,
                 "enableRateLimit": True,
-                "options": {"defaultType": "future"},
             }
         )
         if testnet:
-            self._exchange.enable_demo_trading(True)
-            logger.info("Exchange initialised in DEMO TRADING mode (demo-fapi.binance.com)")
+            self._exchange.set_sandbox_mode(True)
+            logger.info("Exchange initialised in TESTNET mode (HyperLiquid testnet)")
         else:
             logger.warning("Exchange initialised in LIVE mode — real money!")
 
@@ -50,7 +49,7 @@ class BinanceFuturesExchange:
         return self._retry(self._exchange.fetch_ticker, symbol)
 
     def fetch_ohlcv(
-        self, symbol: str, timeframe: str, since: int, limit: int = 1000
+        self, symbol: str, timeframe: str, since: int, limit: int = 5000
     ) -> list:
         return self._retry(
             self._exchange.fetch_ohlcv, symbol, timeframe, since, limit
@@ -70,19 +69,19 @@ class BinanceFuturesExchange:
     def fetch_balance(self) -> dict:
         return self._retry(self._exchange.fetch_balance)
 
-    def get_usdt_balance(self) -> float:
+    def get_balance(self) -> float:
+        """Return free USDC balance."""
         balance = self.fetch_balance()
-        usdc = float(balance.get("USDC", {}).get("free", 0.0))
-        usdt = float(balance.get("USDT", {}).get("free", 0.0))
-        return usdc
- 
+        return float(balance.get("USDC", {}).get("free", 0.0))
 
     def fetch_positions(self) -> list[dict]:
         return self._retry(self._exchange.fetch_positions)
 
     def set_leverage(self, symbol: str, leverage: int = config.LEVERAGE) -> None:
         try:
-            self._exchange.set_leverage(leverage, symbol)
+            self._exchange.set_margin_mode(
+                "cross", symbol, {"leverage": leverage}
+            )
             logger.debug("Leverage set to %d× for %s", leverage, symbol)
         except ccxt.ExchangeError as exc:
             logger.warning("Could not set leverage: %s", exc)
@@ -118,10 +117,14 @@ class BinanceFuturesExchange:
         amount: float,
         params: Optional[dict] = None,
     ) -> dict:
+        """Place a market order. Uses ticker price as price hint for HyperLiquid."""
         params = params or {}
+        # HyperLiquid requires a price hint for market orders
+        ticker = self._retry(self._exchange.fetch_ticker, symbol)
+        price = ticker.get("last") or ticker.get("close", 0)
         order = self._retry(
             self._exchange.create_market_order,
-            symbol, side, amount, params,
+            symbol, side, amount, price, params,
         )
         logger.info(
             "Market order placed: %s %s %.4f (id=%s)",
@@ -138,15 +141,14 @@ class BinanceFuturesExchange:
     def place_stop_loss_order(
         self, symbol: str, side: str, amount: float, stop_price: float
     ) -> dict:
-        """Place a stop-market order for SL."""
+        """Place a stop-loss order using triggerPrice (HyperLiquid style)."""
         params = {
-            "stopPrice": stop_price,
-            "type": "STOP_MARKET",
+            "triggerPrice": stop_price,
             "reduceOnly": True,
         }
         order = self._retry(
             self._exchange.create_order,
-            symbol, "STOP_MARKET", side, amount, stop_price, params,
+            symbol, "market", side, amount, stop_price, params,
         )
         logger.info(
             "Stop-loss order placed: %s %s %.4f @ stop=%.4f (id=%s)",
@@ -157,15 +159,14 @@ class BinanceFuturesExchange:
     def place_take_profit_order(
         self, symbol: str, side: str, amount: float, tp_price: float
     ) -> dict:
-        """Place a take-profit-market order."""
+        """Place a take-profit order using triggerPrice (HyperLiquid style)."""
         params = {
-            "stopPrice": tp_price,
-            "type": "TAKE_PROFIT_MARKET",
+            "triggerPrice": tp_price,
             "reduceOnly": True,
         }
         order = self._retry(
             self._exchange.create_order,
-            symbol, "TAKE_PROFIT_MARKET", side, amount, tp_price, params,
+            symbol, "market", side, amount, tp_price, params,
         )
         logger.info(
             "TP order placed: %s %s %.4f @ tp=%.4f (id=%s)",

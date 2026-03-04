@@ -9,7 +9,7 @@ import pandas as pd
 from dataclasses import dataclass, field
 from typing import Optional
 
-from live.exchange import BinanceFuturesExchange
+from live.exchange import HyperLiquidExchange
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -36,7 +36,7 @@ class PositionTracker:
     Internal positions dict: symbol → Position
     """
 
-    def __init__(self, exchange: BinanceFuturesExchange) -> None:
+    def __init__(self, exchange: HyperLiquidExchange) -> None:
         self._ex = exchange
         self._positions: dict[str, Position] = {}
 
