@@ -154,7 +154,12 @@ class RiskManager:
     # -------------------------------------------------------------------------
 
     def _check_circuit_breaker(self) -> None:
-        drawdown = (self.session_high - self.equity) / self.session_high
+        # Bulletproof: never divide, use subtraction only
+        if self.session_high <= 0 or self.equity >= self.session_high:
+            drawdown = 0.0
+        else:
+            loss = self.session_high - self.equity
+            drawdown = loss / self.session_high if self.session_high > 1e-10 else 0.0
         if drawdown >= config.CIRCUIT_BREAKER_DRAWDOWN:
             if not self.halted:
                 logger.critical(

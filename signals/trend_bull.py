@@ -4,15 +4,18 @@ Strategy: Trend Following Long (Bull)
 Mirror of the bear trend_following strategy, but for long positions.
 
 Entry conditions (ALL must be true):
-  1. Regime is BULL (composite score >= +3)
-  2. EMA-20 > EMA-50 on 1h (ongoing bullish alignment)
-  3. ADX > 25 (strong trend)
-  4. RSI < 65 (not overbought — room to run)
+  1. Regime is BULL (composite score >= +4)
+  2. EMA-20 > EMA-50 on 4h (ongoing bullish alignment)
+  3. ADX > 30 (strong trend)
+  4. RSI < 55 (enter in recovery, not overbought)
+  5. Volume > 130% of SMA-20 (volume confirmation)
+  6. DI+ > DI- (directional confirmation)
 
 Exit conditions (first hit wins):
   - RSI > 70 → overbought, take profit
   - EMA-20 crosses below EMA-50 (death cross) → close position
   - ATR-based stop loss hit (entry − 2×ATR below entry)
+  - Take profit at entry + 3×risk (6×ATR above entry)
 """
 
 import pandas as pd
@@ -81,12 +84,16 @@ def generate_signals(
 
     # ─── Entry conditions ─────────────────────────────────────────────
     ema_bullish_alignment = df["ema_fast"] > df["ema_slow"]
+    volume_confirmation = df["volume"] > df["volume_sma"] * config.VOLUME_CONFIRMATION_MULT
+    di_confirmation = df["di_plus_dominates"]                   # DI+ must dominate
 
     entry_mask = (
         df["regime_bull"]                                      # 1. BULL regime
         & ema_bullish_alignment                                # 2. EMA-20 > EMA-50
         & (df["adx"] > config.BULL_ADX_THRESHOLD)             # 3. strong trend
-        & (df["rsi"] < config.BULL_RSI_ENTRY_MAX)             # 4. RSI < 65
+        & (df["rsi"] < config.BULL_RSI_ENTRY_MAX)             # 4. RSI < 55
+        & volume_confirmation                                  # 5. volume > 130% SMA-20
+        & di_confirmation                                      # 6. DI+ dominates
     )
 
     # ─── Exit conditions ──────────────────────────────────────────────
@@ -94,19 +101,31 @@ def generate_signals(
     exit_death_cross = df["death_cross"]                       # EMA-20 crosses below EMA-50
     exit_mask = exit_rsi | exit_death_cross
 
-    # ─── Signal column ────────────────────────────────────────────────
+    # ─── Signal column (state machine: entry → hold → exit → next) ────
+    raw_signal = pd.Series(0, index=df.index)
+    raw_signal[entry_mask] = 1
+    raw_signal[exit_mask & ~entry_mask] = -1
+
     df["signal"] = 0
-    df.loc[entry_mask, "signal"] = 1
-    df.loc[exit_mask & ~entry_mask, "signal"] = -1
+    in_position = False
+    for i in range(len(df)):
+        sig = raw_signal.iloc[i]
+        if not in_position and sig == 1:
+            df.iloc[i, df.columns.get_loc("signal")] = 1
+            in_position = True
+        elif in_position and sig == -1:
+            df.iloc[i, df.columns.get_loc("signal")] = -1
+            in_position = False
 
-    # ─── Trade metadata ───────────────────────────────────────────────
+    # ─── Trade metadata (only on actual entries) ──────────────────────
+    actual_entries = df["signal"] == 1
     risk = config.ATR_MULTIPLIER_BULL * df["atr"]
-    df["side"] = np.where(entry_mask, "long", "")
-    df["entry_price"] = np.where(entry_mask, df["close"], np.nan)
-    df["stop_loss"] = np.where(entry_mask, df["close"] - risk, np.nan)       # below entry
-    df["take_profit"] = np.where(entry_mask, df["close"] + 2 * risk, np.nan)  # above entry
+    df["side"] = np.where(actual_entries, "long", "")
+    df["entry_price"] = np.where(actual_entries, df["close"], np.nan)
+    df["stop_loss"] = np.where(actual_entries, df["close"] - risk, np.nan)       # below entry
+    df["take_profit"] = np.where(actual_entries, df["close"] + 3 * risk, np.nan)  # above entry (3x risk)
 
-    n_entries = entry_mask.sum()
+    n_entries = actual_entries.sum()
     logger.info(
         "[%s] %s: %d entry signals, %d exit signals",
         STRATEGY_NAME, symbol, n_entries, exit_mask.sum(),
@@ -140,4 +159,5 @@ def get_latest_signal(
         "regime_bull": bool(last["regime_bull"]),
         "rsi": last["rsi"],
         "adx": last["adx"],
+        "atr": last["atr"],
     }

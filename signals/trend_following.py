@@ -82,19 +82,31 @@ def generate_signals(
     exit_golden_cross = df["golden_cross"]
     exit_mask = exit_rsi | exit_golden_cross
 
-    # ─── Signal column ────────────────────────────────────────────────
+    # ─── Signal column (state machine: entry → hold → exit → next) ────
+    raw_signal = pd.Series(0, index=df.index)
+    raw_signal[entry_mask] = 1
+    raw_signal[exit_mask & ~entry_mask] = -1
+
     df["signal"] = 0
-    df.loc[entry_mask, "signal"] = 1
-    df.loc[exit_mask & ~entry_mask, "signal"] = -1
+    in_position = False
+    for i in range(len(df)):
+        sig = raw_signal.iloc[i]
+        if not in_position and sig == 1:
+            df.iloc[i, df.columns.get_loc("signal")] = 1
+            in_position = True
+        elif in_position and sig == -1:
+            df.iloc[i, df.columns.get_loc("signal")] = -1
+            in_position = False
 
-    # ─── Trade metadata ───────────────────────────────────────────────
+    # ─── Trade metadata (only on actual entries) ──────────────────────
+    actual_entries = df["signal"] == 1
     risk = config.ATR_MULTIPLIER * df["atr"]
-    df["side"] = np.where(entry_mask, "short", "")
-    df["entry_price"] = np.where(entry_mask, df["close"], np.nan)
-    df["stop_loss"] = np.where(entry_mask, df["close"] + risk, np.nan)       # above entry
-    df["take_profit"] = np.where(entry_mask, df["close"] - 2 * risk, np.nan)  # below entry
+    df["side"] = np.where(actual_entries, "short", "")
+    df["entry_price"] = np.where(actual_entries, df["close"], np.nan)
+    df["stop_loss"] = np.where(actual_entries, df["close"] + risk, np.nan)       # above entry
+    df["take_profit"] = np.where(actual_entries, df["close"] - 2 * risk, np.nan)  # below entry
 
-    n_entries = entry_mask.sum()
+    n_entries = actual_entries.sum()
     logger.info(
         "[%s] %s: %d entry signals, %d exit signals",
         STRATEGY_NAME, symbol, n_entries, exit_mask.sum(),
@@ -130,4 +142,5 @@ def get_latest_signal(
         "regime_bear": bool(last["regime_bear"]),
         "rsi": last["rsi"],
         "adx": last["adx"],
+        "atr": last["atr"],
     }

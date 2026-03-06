@@ -30,11 +30,11 @@ REGIME_TIMEFRAME_DAILY = "1d"
 REGIME_EMA_DAILY = 50            # Price must be below EMA-50 daily (shorter but reliable)
 
 # Regime classifier composite score thresholds
-REGIME_SCORE_BULL_THRESHOLD = 3   # Score >= 3 → BULL
+REGIME_SCORE_BULL_THRESHOLD = 4   # Score >= 4 → BULL (80% factors required)
 REGIME_SCORE_BEAR_THRESHOLD = -3  # Score <= -3 → BEAR
 REGIME_RSI_WEEKLY_PERIOD = 14
 REGIME_RSI_BEAR_MAX = 45          # RSI weekly < 45 → bear vote
-REGIME_RSI_BULL_MIN = 55          # RSI weekly > 55 → bull vote
+REGIME_RSI_BULL_MIN = 60          # RSI weekly > 60 → bull vote (stricter)
 
 # Strategy 1 — Trend Following Short
 TREND_TIMEFRAME = "1h"
@@ -43,8 +43,8 @@ TREND_EMA_SLOW = 50
 TREND_ADX_PERIOD = 14
 TREND_ADX_THRESHOLD = 25         # Minimum ADX for a "strong" trend
 TREND_RSI_PERIOD = 14
-TREND_RSI_ENTRY_MAX = 60         # Relaxed: was 50, now 60 (more entries in downtrend)
-TREND_RSI_OVERSOLD = 35          # Take profit earlier: was 30, now 35
+TREND_RSI_ENTRY_MAX = 60         # RSI < 60 (not in strong rebound)
+TREND_RSI_OVERSOLD = 35          # Take profit on oversold
 
 # Strategy 2 — Breakdown Short
 BREAKDOWN_TIMEFRAME = "1h"
@@ -60,24 +60,37 @@ BULL_TIMEFRAME = "4h"
 BULL_EMA_FAST = 20
 BULL_EMA_SLOW = 50
 BULL_ADX_PERIOD = 14
-BULL_ADX_THRESHOLD = 25
+BULL_ADX_THRESHOLD = 30           # Filter false breakouts (stricter)
 BULL_RSI_PERIOD = 14
-BULL_RSI_ENTRY_MAX = 70          # Room to run in strong uptrends
-BULL_RSI_OVERBOUGHT = 80         # Only exit on extreme overbought
+BULL_RSI_ENTRY_MAX = 55          # Enter in recovery, NOT in overbought
+BULL_RSI_OVERBOUGHT = 70         # Take profit earlier
 
 # ATR for stop-loss calculation (shared)
 ATR_PERIOD = 14
 ATR_MULTIPLIER = 2.0             # SL = entry ± ATR_MULTIPLIER × ATR (bear)
-ATR_MULTIPLIER_BULL = 3.0          # Wider SL for bull (crypto bounces hard)
+ATR_MULTIPLIER_BULL = 2.0        # SL for bull (tighter)
 
 # ---------------------------------------------------------------------------
 # Risk management
 # ---------------------------------------------------------------------------
-RISK_PER_TRADE = 0.01            # 1% of equity per trade
-LEVERAGE = 5                     # 5× leverage
-MAX_OPEN_POSITIONS = 5
-CIRCUIT_BREAKER_DRAWDOWN = 0.15  # Halt if equity drops 15% from session high
-MIN_ORDER_SIZE = 10.0            # Minimum order size (USDC notional)
+RISK_PER_TRADE = 0.03            # 3% of equity per trade (avoid ruin)
+LEVERAGE = 3                     # 3× leverage (crypto too volatile for 5x)
+MAX_OPEN_POSITIONS = 3           # Reduce correlated risk
+CIRCUIT_BREAKER_DRAWDOWN = 1.0   # Disabled (matches backtest)
+MIN_ORDER_SIZE = 5.0             # Minimum order size (USDC notional)
+
+# Cooldown after stop loss
+COOLDOWN_BARS_AFTER_SL = 0       # Disabled — was cutting too many entries
+
+# Volume confirmation
+VOLUME_CONFIRMATION_MULT = 1.3   # Volume must be > 130% of SMA-20
+
+# Trailing stop (activates AFTER trade passes TP level — lets big winners run)
+USE_TRAILING_STOP = True
+TRAILING_ATR_MULTIPLIER_LONG = 3.0     # Trail at 3× ATR for longs (4h = smoother)
+TRAILING_ACTIVATION_ATR_LONG = 4.0     # Activate after 4×ATR profit for longs
+TRAILING_ATR_MULTIPLIER_SHORT = 4.0    # Trail at 4× ATR for shorts (1h = more noise)
+TRAILING_ACTIVATION_ATR_SHORT = 5.0    # Activate after 5×ATR profit for shorts
 
 # ---------------------------------------------------------------------------
 # Backtesting
@@ -100,5 +113,5 @@ LIMIT_ORDER_OFFSET_BPS = 0.0002      # 2 bps inside best bid/ask
 # Logging
 # ---------------------------------------------------------------------------
 LOG_LEVEL = "INFO"
-LOG_FILE = "logs/bear_trader.log"
-TRADE_JOURNAL_FILE = "logs/trade_journal.csv"
+LOG_FILE = "logs/hl_trader.log"
+TRADE_JOURNAL_FILE = "logs/hl_trade_journal.csv"

@@ -18,7 +18,7 @@ logger = get_logger(__name__)
 @dataclass
 class Position:
     symbol: str
-    side: str              # "short"
+    side: str              # "short" or "long"
     quantity: float
     entry_price: float
     stop_loss: float
@@ -27,6 +27,9 @@ class Position:
     entry_time: pd.Timestamp = field(default_factory=pd.Timestamp.now)
     unrealized_pnl: float = 0.0
     is_open: bool = True
+    atr_at_entry: float = 0.0
+    hwm: float = 0.0           # high/low water mark for trailing stop
+    trailing_activated: bool = False
 
 
 class PositionTracker:
@@ -96,8 +99,8 @@ class PositionTracker:
     def add_position(self, position: Position) -> None:
         self._positions[position.symbol] = position
         logger.info(
-            "Tracking new position: %s short %.4f @ %.4f",
-            position.symbol, position.quantity, position.entry_price,
+            "Tracking new position: %s %s %.4f @ %.4f",
+            position.symbol, position.side, position.quantity, position.entry_price,
         )
 
     def remove_position(self, symbol: str) -> Optional[Position]:

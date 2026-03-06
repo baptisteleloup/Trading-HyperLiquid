@@ -40,16 +40,23 @@ def run_backtest(
     leverage: int = config.LEVERAGE,
     risk_pct: float = config.RISK_PER_TRADE,
     max_positions: int = config.MAX_OPEN_POSITIONS,
+    circuit_breaker_pct: float = config.CIRCUIT_BREAKER_DRAWDOWN,
+    cb_reset_days: int = 0,
 ) -> BacktestResult:
     """
     Simulate trading the signals in signal_df.
 
     The position side is determined by signal_df.attrs["side"] (default "short").
+    cb_reset_days: if >0, reset circuit breaker every N days (simulates bot restart).
     """
     default_side = signal_df.attrs.get("side", "short")
     equity = initial_capital
     session_high = initial_capital
     halted = False
+    last_cb_reset = signal_df.index[0] if len(signal_df) > 0 else None
+
+    # Cooldown tracking: bar index of last stop loss
+    last_sl_bar_idx = -config.COOLDOWN_BARS_AFTER_SL - 1  # allow entry from start
 
     open_trades: list[dict] = []
     closed_trades: list[dict] = []
@@ -62,16 +69,22 @@ def run_backtest(
     else:
         delta_hours = 1.0
 
-    for ts, row in signal_df.iterrows():
+    for bar_idx, (ts, row) in enumerate(signal_df.iterrows()):
         # ── Mark-to-market and check SL/TP ────────────────────────────
         still_open = []
         for trade in open_trades:
+            # Update trailing stop before checking exit
+            if config.USE_TRAILING_STOP:
+                _update_trailing_stop(row, trade)
             pnl, closed_trade = _check_exit(row, trade, taker_fee, slippage)
             if closed_trade is not None:
                 equity += pnl
                 closed_trade["exit_time"] = ts
                 closed_trade["pnl"] = pnl
                 closed_trades.append(closed_trade)
+                # Track SL cooldown
+                if closed_trade.get("exit_reason") == "stop_loss":
+                    last_sl_bar_idx = bar_idx
             else:
                 if delta_hours > 0:
                     funding_events = delta_hours / FUNDING_PERIOD_HOURS
@@ -86,26 +99,54 @@ def run_backtest(
                 still_open.append(trade)
         open_trades = still_open
 
-        # ── Circuit breaker ───────────────────────────────────────────
+        # ── Circuit breaker (with periodic reset) ────────────────────
+        if cb_reset_days > 0 and last_cb_reset is not None:
+            days_since_reset = (ts - last_cb_reset).total_seconds() / 86400
+            if days_since_reset >= cb_reset_days:
+                session_high = equity
+                halted = False
+                last_cb_reset = ts
+
         if equity > session_high:
             session_high = equity
         drawdown = (session_high - equity) / session_high if session_high > 0 else 0
-        if drawdown >= config.CIRCUIT_BREAKER_DRAWDOWN:
+        if drawdown >= circuit_breaker_pct:
             halted = True
         if halted:
             equity_history.append((ts, equity))
             continue
+
+        # ── Cooldown check ─────────────────────────────────────────────
+        in_cooldown = (bar_idx - last_sl_bar_idx) < config.COOLDOWN_BARS_AFTER_SL
 
         # ── New entry ─────────────────────────────────────────────────
         if (
             row["signal"] == 1
             and len(open_trades) < max_positions
             and not np.isnan(row.get("entry_price", float("nan")))
+            and not in_cooldown
         ):
             # Determine side from row or default
             side = row.get("side", default_side)
             if not side or (isinstance(side, float) and np.isnan(side)):
                 side = default_side
+
+            # ── Close opposite-side positions (regime switch) ────────
+            still_open_after_flip = []
+            for trade in open_trades:
+                if trade["side"] != side:
+                    # Force-close: regime changed, close opposite position
+                    if trade["side"] == "long":
+                        exit_px = row["close"] * (1 - slippage)
+                    else:
+                        exit_px = row["close"] * (1 + slippage)
+                    pnl, closed = _force_close(trade, exit_px, taker_fee, ts)
+                    equity += pnl
+                    closed["exit_reason"] = "regime_switch"
+                    closed_trades.append(closed)
+                else:
+                    still_open_after_flip.append(trade)
+            open_trades = still_open_after_flip
 
             if side == "long":
                 entry_px = row["entry_price"] * (1 + slippage)  # slippage against long
@@ -141,6 +182,8 @@ def run_backtest(
                 "total_funding": 0.0,
                 "strategy": signal_df.attrs.get("strategy", "unknown"),
                 "side": side,
+                "hwm": entry_px if side == "long" else entry_px,  # high/low water mark
+                "atr_at_entry": row.get("atr", 0.0),
             }
             open_trades.append(trade)
 
@@ -187,6 +230,51 @@ def run_backtest(
     )
 
 
+def _update_trailing_stop(row: pd.Series, trade: dict) -> None:
+    """
+    Update the trailing stop based on high/low water mark.
+    Only activates after the trade has moved TRAILING_ACTIVATION_ATR × ATR
+    in our favor. Before that, the fixed SL and TP remain in control.
+    """
+    side = trade.get("side", "short")
+    atr = trade.get("atr_at_entry", 0.0)
+    if atr <= 0:
+        return
+
+    entry = trade["entry_price"]
+    if side == "long":
+        activation_dist = config.TRAILING_ACTIVATION_ATR_LONG * atr
+        trail_dist = config.TRAILING_ATR_MULTIPLIER_LONG * atr
+    else:
+        activation_dist = config.TRAILING_ACTIVATION_ATR_SHORT * atr
+        trail_dist = config.TRAILING_ATR_MULTIPLIER_SHORT * atr
+
+    if side == "long":
+        # Update high water mark
+        if row["high"] > trade["hwm"]:
+            trade["hwm"] = row["high"]
+        # Only activate trailing after sufficient profit
+        if (trade["hwm"] - entry) < activation_dist:
+            return
+        trade["trailing_activated"] = True
+        trailing_sl = trade["hwm"] - trail_dist
+        # Only tighten the SL (move it up), never loosen
+        if trailing_sl > trade["stop_loss"]:
+            trade["stop_loss"] = trailing_sl
+    else:  # short
+        # Update low water mark (lowest low since entry)
+        if row["low"] < trade["hwm"]:
+            trade["hwm"] = row["low"]
+        # Only activate trailing after sufficient profit
+        if (entry - trade["hwm"]) < activation_dist:
+            return
+        trade["trailing_activated"] = True
+        trailing_sl = trade["hwm"] + trail_dist
+        # Only tighten the SL (move it down), never loosen
+        if trailing_sl < trade["stop_loss"]:
+            trade["stop_loss"] = trailing_sl
+
+
 def _check_exit(
     row: pd.Series,
     trade: dict,
@@ -206,13 +294,16 @@ def _check_exit(
     exit_price = None
     exit_reason = None
 
+    # When trailing is activated, skip fixed TP — trailing SL manages the exit
+    trailing_active = trade.get("trailing_activated", False)
+
     if side == "short":
-        # SL hit: price went UP through SL
+        # SL hit: price went UP through SL (initial or trailed)
         if row["high"] >= sl:
             exit_price = sl * (1 + slippage)
-            exit_reason = "stop_loss"
-        # TP hit: price went DOWN through TP
-        elif row["low"] <= tp:
+            exit_reason = "trailing_stop" if trailing_active else "stop_loss"
+        # TP hit: only if trailing hasn't taken over yet
+        elif not trailing_active and row["low"] <= tp:
             exit_price = tp * (1 - slippage)
             exit_reason = "take_profit"
         # Signal exit
@@ -220,12 +311,12 @@ def _check_exit(
             exit_price = row["close"] * (1 + slippage)
             exit_reason = "signal_exit"
     else:  # long
-        # SL hit: price went DOWN through SL
+        # SL hit: price went DOWN through SL (initial or trailed)
         if row["low"] <= sl:
             exit_price = sl * (1 - slippage)
-            exit_reason = "stop_loss"
-        # TP hit: price went UP through TP
-        elif row["high"] >= tp:
+            exit_reason = "trailing_stop" if trailing_active else "stop_loss"
+        # TP hit: only if trailing hasn't taken over yet
+        elif not trailing_active and row["high"] >= tp:
             exit_price = tp * (1 + slippage)
             exit_reason = "take_profit"
         # Signal exit

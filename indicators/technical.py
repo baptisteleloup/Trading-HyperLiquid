@@ -96,6 +96,12 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # -------------------------------------------------------------------------
     # Death cross / golden cross signals
     # -------------------------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # DI dominance (directional confirmation)
+    # -------------------------------------------------------------------------
+    df["di_plus_dominates"] = df["adx_pos"] > df["adx_neg"]
+    df["di_minus_dominates"] = df["adx_neg"] > df["adx_pos"]
+
     df["ema_cross"] = np.sign(df["ema_fast"] - df["ema_slow"])
     df["death_cross"] = (df["ema_cross"] == -1) & (df["ema_cross"].shift(1) == 1)
     df["golden_cross"] = (df["ema_cross"] == 1) & (df["ema_cross"].shift(1) == -1)

@@ -12,6 +12,7 @@ Safety:
 """
 
 import argparse
+import os
 import sys
 
 import config
@@ -28,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--mode",
-        choices=["backtest", "live", "dryrun"],
+        choices=["backtest", "backtest-combined", "live", "dryrun"],
         required=True,
         help="Operating mode",
     )
@@ -97,10 +98,11 @@ def run_backtest(args: argparse.Namespace) -> None:
 
             df.attrs["strategy"] = strategy_name
 
-            # Run backtest
+            # Run backtest (CB disabled — it's a live safety feature, not a backtest filter)
             result = engine_backtest(
                 signal_df=df,
                 initial_capital=args.capital,
+                circuit_breaker_pct=1.0,
             )
 
             # Print metrics
@@ -131,7 +133,7 @@ def run_live_or_dryrun(args: argparse.Namespace) -> None:
     if args.mode == "live" and not config.HL_TESTNET:
         print("\n⚠️  WARNING: You are about to trade with REAL MONEY on HyperLiquid!")
         print("   HL_TESTNET=false in your .env file.")
-        confirm = input("   Type 'YES' to confirm: ").strip()
+        confirm = os.environ.get("HL_SKIP_CONFIRM", "") and "YES" or input("   Type 'YES' to confirm: ").strip()
         if confirm != "YES":
             print("Aborting.")
             sys.exit(0)
@@ -155,6 +157,29 @@ def main() -> None:
 
     if args.mode == "backtest":
         run_backtest(args)
+    elif args.mode == "backtest-combined":
+        from backtest.combined import run_combined_backtest, print_combined_summary
+        from backtest.plotter import plot_equity_and_drawdown
+        import os
+        os.makedirs("backtest/results", exist_ok=True)
+        for symbol in args.symbol:
+            result = run_combined_backtest(
+                symbol=symbol,
+                start=args.start,
+                end=args.end,
+                capital=args.capital,
+                testnet=config.HL_TESTNET,
+            )
+            print_combined_summary(result, symbol, args.start, args.end)
+            equity_path = f"backtest/results/combined_{symbol.replace('/', '_').replace(':', '_')}_equity.csv"
+            result.equity_curve.to_csv(equity_path)
+            logger.info("Equity curve saved to %s", equity_path)
+            plot_equity_and_drawdown(
+                result.equity_curve,
+                result.trades,
+                symbol=symbol,
+                strategy="combined",
+            )
     else:
         run_live_or_dryrun(args)
 

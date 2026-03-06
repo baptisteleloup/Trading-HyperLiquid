@@ -27,6 +27,7 @@ class HyperLiquidExchange:
                 "walletAddress": config.HL_WALLET_ADDRESS,
                 "privateKey": config.HL_PRIVATE_KEY,
                 "enableRateLimit": True,
+                "timeout": 15000,  # 15s timeout on all API calls
             }
         )
         if testnet:
@@ -70,9 +71,61 @@ class HyperLiquidExchange:
         return self._retry(self._exchange.fetch_balance)
 
     def get_balance(self) -> float:
-        """Return free USDC balance."""
-        balance = self.fetch_balance()
-        return float(balance.get("USDC", {}).get("free", 0.0))
+        """Return account equity (margin + unrealized PnL + free cash) via HL API.
+
+        Uses `clearinghouseState` for perp equity first (accountValue), then
+        falls back to `spotClearinghouseState` for unified/spot-only accounts.
+        This avoids returning only the *free* balance when margin is in use.
+        """
+        import requests as _req
+
+        addr = config.HL_WALLET_ADDRESS
+        base_url = "https://api.hyperliquid-testnet.xyz/info" if config.HL_TESTNET else "https://api.hyperliquid.xyz/info"
+
+        # Primary: perp clearinghouse → accountValue includes margin + unrealised PnL
+        try:
+            resp = _req.post(
+                base_url,
+                json={"type": "clearinghouseState", "user": addr},
+                timeout=10,
+            )
+            data = resp.json()
+            account_value = float(data.get("marginSummary", {}).get("accountValue", 0.0))
+            if account_value > 0:
+                logger.info("Balance (perp equity): %.2f USDC", account_value)
+                return account_value
+        except Exception as exc:
+            logger.warning("clearinghouseState fetch failed: %s", exc)
+
+        # Fallback: spot clearinghouse (unified accounts with no open perp positions)
+        try:
+            resp = _req.post(
+                base_url,
+                json={"type": "spotClearinghouseState", "user": addr},
+                timeout=10,
+            )
+            data = resp.json()
+            available = dict(data.get("tokenToAvailableAfterMaintenance", []))
+            spot_usdc = float(available.get(0, 0.0))
+            if spot_usdc > 0:
+                logger.info("Balance (unified spot): %.2f USDC", spot_usdc)
+            return spot_usdc
+        except Exception as exc:
+            logger.warning("Balance fetch via native API failed: %s", exc)
+            return 0.0
+
+    def transfer_spot_to_perp(self, amount: float) -> bool:
+        """Transfer USDC from spot wallet to perp margin (needed before trading perps)."""
+        try:
+            self._exchange.transfer("USDC", amount, "spot", "swap")
+            logger.info("Transferred %.2f USDC from spot to perp", amount)
+            return True
+        except Exception as exc:
+            if "unified account" in str(exc).lower() or "action disabled" in str(exc).lower():
+                logger.info("Unified account — spot/perp are merged, no transfer needed.")
+            else:
+                logger.error("Spot→Perp transfer failed: %s", exc)
+            return False
 
     def fetch_positions(self) -> list[dict]:
         return self._retry(self._exchange.fetch_positions)
@@ -135,15 +188,32 @@ class HyperLiquidExchange:
     def cancel_order(self, order_id: str, symbol: str) -> dict:
         return self._retry(self._exchange.cancel_order, order_id, symbol)
 
+    def fetch_open_orders(self, symbol: str) -> list[dict]:
+        return self._retry(self._exchange.fetch_open_orders, symbol)
+
+    def cancel_all_orders(self, symbol: str) -> None:
+        """Cancel all open orders for a symbol."""
+        orders = self.fetch_open_orders(symbol)
+        for order in orders:
+            try:
+                self.cancel_order(order["id"], symbol)
+            except Exception as exc:
+                logger.warning("Failed to cancel order %s: %s", order["id"], exc)
+
     def fetch_order(self, order_id: str, symbol: str) -> dict:
         return self._retry(self._exchange.fetch_order, order_id, symbol)
 
     def place_stop_loss_order(
         self, symbol: str, side: str, amount: float, stop_price: float
     ) -> dict:
-        """Place a stop-loss order using triggerPrice (HyperLiquid style)."""
+        """Place a stop-loss trigger order on HyperLiquid.
+
+        Uses `stopLossPrice` (not `triggerPrice`) so CCXT sends tpsl='sl'
+        to HL, which triggers when price moves *against* the position
+        (i.e. above the SL for a short, below for a long).
+        """
         params = {
-            "triggerPrice": stop_price,
+            "stopLossPrice": stop_price,
             "reduceOnly": True,
         }
         order = self._retry(
@@ -159,9 +229,14 @@ class HyperLiquidExchange:
     def place_take_profit_order(
         self, symbol: str, side: str, amount: float, tp_price: float
     ) -> dict:
-        """Place a take-profit order using triggerPrice (HyperLiquid style)."""
+        """Place a take-profit trigger order on HyperLiquid.
+
+        Uses `takeProfitPrice` so CCXT sends tpsl='tp' to HL, which
+        triggers when price moves *in favour* of the position
+        (i.e. below the TP for a short, above for a long).
+        """
         params = {
-            "triggerPrice": tp_price,
+            "takeProfitPrice": tp_price,
             "reduceOnly": True,
         }
         order = self._retry(

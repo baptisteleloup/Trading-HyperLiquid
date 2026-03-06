@@ -137,21 +137,54 @@ class OrderManager:
         self,
         symbol: str,
         quantity: float,
+        side: str = "short",
         reason: str = "signal_exit",
     ) -> Optional[dict]:
         """
-        Close a short position with a market buy.
-        Also attempts to cancel any open SL/TP orders for the symbol.
+        Close a position with a market order + cancel remaining SL/TP orders.
+        side: the position side ('short' or 'long').
         """
-        logger.info("[%s] Closing short (%.4f) — reason: %s", symbol, quantity, reason)
+        close_side = "buy" if side == "short" else "sell"
+        logger.info("[%s] Closing %s (%.4f) — reason: %s", symbol, side, quantity, reason)
+
+        # Cancel SL/TP orders first to avoid them triggering during close
+        try:
+            self._ex.cancel_all_orders(symbol)
+        except Exception as exc:
+            logger.warning("Failed to cancel orders before close: %s", exc)
+
         try:
             order = self._ex.place_market_order(
-                symbol, "buy", quantity, params={"reduceOnly": True}
+                symbol, close_side, quantity, params={"reduceOnly": True}
             )
             return order
         except Exception as exc:
             logger.error("Failed to close position: %s", exc)
             return None
+
+    def update_stop_loss(
+        self,
+        symbol: str,
+        quantity: float,
+        new_sl: float,
+        sl_side: str,
+    ) -> bool:
+        """
+        Cancel all open orders for the symbol and place a new SL only.
+        Used when trailing stop activates (replaces both fixed SL and TP).
+        sl_side: 'buy' for shorts, 'sell' for longs.
+        """
+        try:
+            self._ex.cancel_all_orders(symbol)
+        except Exception as exc:
+            logger.warning("Failed to cancel orders for trailing update on %s: %s", symbol, exc)
+
+        try:
+            self._ex.place_stop_loss_order(symbol, sl_side, quantity, new_sl)
+            return True
+        except Exception as exc:
+            logger.error("Failed to place updated trailing SL for %s: %s", symbol, exc)
+            return False
 
     # -------------------------------------------------------------------------
     # Internal helpers
